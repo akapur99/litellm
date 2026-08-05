@@ -25,11 +25,11 @@ def _fake_node(bin_dir: Path, version: str) -> Path:
     return bin_dir
 
 
-def _run(bin_dirs: list[Path], home: Path) -> subprocess.CompletedProcess[str]:
+def _run(bin_dirs: list[Path], home: Path, command: str = "node --version") -> subprocess.CompletedProcess[str]:
     path = os.pathsep.join([*(str(b) for b in bin_dirs), "/usr/bin", "/bin"])
     home.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
-        [str(SCRIPT), "sh", "-c", "node --version"],
+        [str(SCRIPT), "sh", "-c", command],
         capture_output=True,
         text=True,
         env={"PATH": path, "HOME": str(home)},
@@ -64,6 +64,47 @@ def test_missing_node_without_any_manager_fails_with_instructions(tmp_path):
     proc = _run([], tmp_path / "home")
     assert proc.returncode == 1
     assert "missing" in proc.stderr
+
+
+def test_compliant_node_shadowed_later_on_path_is_used(tmp_path):
+    """The common macOS case: a tool-managed old node sits ahead of a compliant one."""
+    old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    new = _fake_node(tmp_path / "new-bin", "99.0.0")
+    proc = _run([old, new], tmp_path / "home")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "v99.0.0"
+    assert "shadowed on PATH" in proc.stderr
+
+
+def test_shadowed_node_is_preferred_over_installing_through_nvm(tmp_path):
+    """No reason to download another copy when a compliant one is already on PATH."""
+    old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    new = _fake_node(tmp_path / "new-bin", "99.0.0")
+    home = tmp_path / "home"
+    nvm_dir = home / ".nvm"
+    nvm_dir.mkdir(parents=True)
+    (nvm_dir / "nvm.sh").write_text('nvm() { echo "NVM RAN" >&2; return 0; }\n')
+    proc = _run([old, new], home)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "v99.0.0"
+    assert "NVM RAN" not in proc.stderr
+
+
+def test_shadowed_node_brings_its_own_npm_along(tmp_path):
+    """Prepending the whole directory keeps node and npm from drifting apart."""
+    old_bin = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    old_npm = old_bin / "npm"
+    old_npm.write_text("#!/bin/sh\necho stale-npm\n")
+    old_npm.chmod(0o755)
+
+    new_bin = _fake_node(tmp_path / "new-bin", "99.0.0")
+    new_npm = new_bin / "npm"
+    new_npm.write_text("#!/bin/sh\necho fresh-npm\n")
+    new_npm.chmod(0o755)
+
+    proc = _run([old_bin, new_bin], tmp_path / "home", command="npm --version")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "fresh-npm"
 
 
 def test_old_node_switches_via_nvm_when_present(tmp_path):

@@ -24,6 +24,27 @@ if [ -n "$current" ] && meets_floor "$current" "$floor"; then
     exec "$@"
 fi
 
+compliant_node_dir() {
+    local IFS=:
+    local dir found
+    for dir in $PATH; do
+        [ -n "$dir" ] && [ -x "$dir/node" ] || continue
+        found=$("$dir/node" --version 2>/dev/null | tr -d 'v' || true)
+        if [ -n "$found" ] && meets_floor "$found" "$floor"; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if shadowed_dir=$(compliant_node_dir); then
+    echo "with_dashboard_node: node ${current:-missing} is below the dashboard floor $floor; using $shadowed_dir/node, already installed but shadowed on PATH" >&2
+    PATH="$shadowed_dir:$PATH"
+    export PATH
+    exec "$@"
+fi
+
 nvm_script="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
 if [ -r "$nvm_script" ]; then
     echo "with_dashboard_node: node ${current:-missing} is below the dashboard floor $floor; switching to $pinned via nvm" >&2
